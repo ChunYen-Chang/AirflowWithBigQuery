@@ -1,0 +1,74 @@
+x-airflow-common:
+  &airflow-common
+  image: airflow-gcpkey-image
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__SQL_ALCHEMY_CONN: mysql+mysqldb://airflow:airflow@mysql:3306/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__CORE__SQL_ALCHEMY_POOL_RECYCLE: 3600
+    PYTHONPATH: /opt/airflow
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./utils:/opt/airflow/utils
+    - ./db:/usr/local/airflow/db
+  user: "${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-50000}"
+  depends_on:
+    mysql:
+      condition: service_healthy
+
+services:
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash -c "/bin/bash -c \"$${@}\""
+    command: |
+      /bin/bash -c "
+        airflow db init
+        airflow db upgrade
+        airflow users create -r Admin -u admin -e airflow@airflow.com -f admin -l user -p airflow
+      "
+    environment:
+      <<: *airflow-common-env
+
+  mysql:
+    image: mysql
+    command: mysqld --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --explicit_defaults_for_timestamp=1
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-db:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_USER: root
+      MYSQL_ROOT_PASSWORD: airflow
+      MYSQL_USER: airflow
+      MYSQL_PASSWORD: airflow
+      MYSQL_DATABASE: airflow
+    healthcheck:
+      test: "mysqladmin ping -h localhost -uairflow -pairflow"
+      interval: 2s
+      retries: 120
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    environment:
+      <<: *airflow-common-env
+    restart: always
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - 8081:8080
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: always
+    environment:
+      <<: *airflow-common-env
+
+volumes:
+  mysql-db:
